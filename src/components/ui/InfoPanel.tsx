@@ -1,4 +1,5 @@
-import { Package, MapPin, Clock, Activity, Keyboard, ArrowDownToLine, ArrowUpFromLine, Upload, Download, ClipboardCheck, Settings, Target, Bot, Hand } from 'lucide-react';
+import { Package, MapPin, Clock, Activity, Keyboard, ArrowDownToLine, ArrowUpFromLine, Upload, Download, ClipboardCheck, Settings, Target, Bot, Hand, Filter, RotateCcw } from 'lucide-react';
+import { useState, useMemo } from 'react';
 import { useStore } from '../../store/useStore';
 import { SLOT_CONFIG, HEATMAP_COLORS, OperationLog, LogType } from '../../types';
 
@@ -46,6 +47,11 @@ export function InfoPanel() {
   const logs = useStore(state => state.logs);
   const showHeatmap = useStore(state => state.showHeatmap);
   const locateLog = useStore(state => state.locateLog);
+  const logFilter = useStore(state => state.logFilter);
+  const setLogFilter = useStore(state => state.setLogFilter);
+
+  const [timeRange, setTimeRange] = useState<string>('all');
+  const [showFilters, setShowFilters] = useState(false);
 
   const totalSlots = SLOT_CONFIG.LAYERS * SLOT_CONFIG.POSITIONS;
   const occupiedSlots = slots.filter(s => s.isOccupied).length;
@@ -74,6 +80,52 @@ export function InfoPanel() {
   const handleLogClick = (log: OperationLog) => {
     locateLog(log);
   };
+
+  const toggleTypeFilter = (type: LogType) => {
+    const currentTypes = logFilter.types || [];
+    const newTypes = currentTypes.includes(type)
+      ? currentTypes.filter(t => t !== type)
+      : [...currentTypes, type];
+    setLogFilter({ types: newTypes });
+  };
+
+  const resetFilters = () => {
+    setTimeRange('all');
+    setLogFilter({ types: [], startTime: undefined, endTime: undefined });
+  };
+
+  const filteredLogs = useMemo(() => {
+    let result = [...logs];
+
+    if (logFilter.types && logFilter.types.length > 0) {
+      result = result.filter(log => logFilter.types.includes(log.type));
+    }
+
+    let startTime: number | undefined;
+    const now = Date.now();
+    switch (timeRange) {
+      case '1h':
+        startTime = now - 60 * 60 * 1000;
+        break;
+      case '6h':
+        startTime = now - 6 * 60 * 60 * 1000;
+        break;
+      case '24h':
+        startTime = now - 24 * 60 * 60 * 1000;
+        break;
+      case '7d':
+        startTime = now - 7 * 24 * 60 * 60 * 1000;
+        break;
+    }
+
+    if (startTime) {
+      result = result.filter(log => log.timestamp >= startTime);
+    }
+
+    return result;
+  }, [logs, logFilter.types, timeRange]);
+
+  const logTypeList: LogType[] = ['inbound', 'outbound', 'import', 'export', 'check', 'task', 'mode'];
 
   return (
     <div className="fixed top-20 right-4 w-80 z-40">
@@ -202,17 +254,94 @@ export function InfoPanel() {
                 <Clock className="w-4 h-4" />
                 操作日志
               </div>
-              <span className="text-xs text-gray-500">{logs.length} 条</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-all ${
+                    showFilters || (logFilter.types?.length || 0) > 0 || timeRange !== 'all'
+                      ? 'bg-blue-500/30 text-blue-400'
+                      : 'text-gray-500 hover:text-gray-300'
+                  }`}
+                >
+                  <Filter className="w-3 h-3" />
+                  筛选
+                </button>
+                <span className="text-xs text-gray-500">{filteredLogs.length}/{logs.length}</span>
+              </div>
             </div>
+
+            {showFilters && (
+              <div className="mb-3 p-2 bg-black/20 rounded-lg space-y-2">
+                <div>
+                  <div className="text-xs text-gray-400 mb-1.5">按类型筛选</div>
+                  <div className="flex flex-wrap gap-1">
+                    {logTypeList.map(type => {
+                      const config = logTypeConfig[type];
+                      const isActive = logFilter.types?.includes(type);
+                      return (
+                        <button
+                          key={type}
+                          onClick={() => toggleTypeFilter(type)}
+                          className={`px-2 py-0.5 rounded text-xs transition-all flex items-center gap-1 ${
+                            isActive
+                              ? `${config.color} bg-white/20`
+                              : 'text-gray-500 hover:text-gray-300 hover:bg-white/10'
+                          }`}
+                        >
+                          {config.icon}
+                          {config.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs text-gray-400 mb-1.5">按时间筛选</div>
+                  <div className="flex flex-wrap gap-1">
+                    {[
+                      { key: 'all', label: '全部' },
+                      { key: '1h', label: '1小时内' },
+                      { key: '6h', label: '6小时内' },
+                      { key: '24h', label: '24小时内' },
+                      { key: '7d', label: '7天内' },
+                    ].map(opt => (
+                      <button
+                        key={opt.key}
+                        onClick={() => setTimeRange(opt.key)}
+                        className={`px-2 py-0.5 rounded text-xs transition-all ${
+                          timeRange === opt.key
+                            ? 'bg-green-500/30 text-green-400'
+                            : 'text-gray-500 hover:text-gray-300 hover:bg-white/10'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    onClick={resetFilters}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded text-xs text-gray-400 hover:text-white hover:bg-white/10 transition-all"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    重置筛选
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-1 max-h-56 overflow-y-auto pr-1 -mr-1">
-              {logs.length === 0 ? (
+              {filteredLogs.length === 0 ? (
                 <div className="text-gray-500 text-xs text-center py-4">
-                  暂无操作记录
+                  暂无匹配的操作记录
                 </div>
               ) : (
-                logs.slice(0, 30).map((log, idx) => {
+                filteredLogs.slice(0, 30).map((log, idx) => {
                   const config = logTypeConfig[log.type];
-                  const canLocate = !!log.slotId;
+                  const canLocate = !!log.slotId || !!log.taskId;
                   return (
                     <div
                       key={log.id}
@@ -228,7 +357,12 @@ export function InfoPanel() {
                           {config.icon}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-gray-300 break-words leading-snug">
+                          <div className="flex items-center gap-1">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${config.color} bg-white/10`}>
+                              {config.label}
+                            </span>
+                          </div>
+                          <div className="text-gray-300 break-words leading-snug mt-0.5">
                             {log.message}
                           </div>
                           <div className="flex items-center gap-2 mt-0.5">

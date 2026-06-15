@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { Scene } from '../components/three/Scene';
 import { ControlPanel } from '../components/ui/ControlPanel';
 import { InfoPanel } from '../components/ui/InfoPanel';
-import { InboundModal, OutboundModal, InventoryModal } from '../components/ui/Modal';
+import { InboundModal, OutboundModal, InventoryModal, WaveOutboundModal } from '../components/ui/Modal';
 import { TaskQueue } from '../components/ui/TaskQueue';
 import { ImportResultToast } from '../components/ui/ImportResultToast';
 import { useKeyboardControl } from '../hooks/useKeyboardControl';
@@ -29,6 +29,7 @@ export default function Home() {
       <InboundModal />
       <OutboundModal />
       <InventoryModal />
+      <WaveOutboundModal />
 
       <div className="fixed bottom-4 left-4 bg-white/10 backdrop-blur-lg rounded-lg px-4 py-2 border border-white/20">
         <div className="text-gray-300 text-xs">

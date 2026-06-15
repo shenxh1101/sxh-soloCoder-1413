@@ -11,7 +11,9 @@ import {
   InboundTask,
   OutboundTask,
   TaskStatus,
+  TaskPriority,
   ImportResult,
+  WaveOutboundResult,
   SLOT_CONFIG,
   STACKER_CONFIG,
   TASK_STORAGE_KEY,
@@ -61,6 +63,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   stacker: initialStacker,
   logs: [],
   taskQueue: [],
+  isQueuePaused: false,
   showHeatmap: false,
   selectedSlot: null,
   highlightedSlotId: null,
@@ -68,11 +71,14 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     inbound: false,
     outbound: false,
     inventory: false,
+    waveOutbound: false,
   },
   outboundGoodsName: '',
   foundSlots: [],
   importResult: null,
   showImportResult: false,
+  logFilter: { types: [] },
+  waveOutboundResult: null,
 
   initSlots: () => {
     const savedSlots = localStorage.getItem('warehouse-slots');
@@ -341,13 +347,14 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     });
   },
 
-  addInboundTask: (layer: number, position: number, name: string, quantity: number): string => {
+  addInboundTask: (layer: number, position: number, name: string, quantity: number, priority: TaskPriority = 'normal'): string => {
     const taskId = generateId();
     const slotId = `L${layer}-P${position}`;
     const task: InboundTask = {
       id: taskId,
       type: 'inbound',
       status: 'pending',
+      priority,
       createdAt: Date.now(),
       slotId,
       layer,
@@ -357,14 +364,25 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     };
 
     set(state => {
-      const newQueue = [...state.taskQueue, task];
+      const pendingTasks = state.taskQueue.filter(t => t.status === 'pending');
+      const otherTasks = state.taskQueue.filter(t => t.status !== 'pending');
+      let newQueue: WarehouseTask[];
+      
+      if (priority === 'urgent') {
+        const urgentTasks = pendingTasks.filter(t => t.priority === 'urgent');
+        const normalTasks = pendingTasks.filter(t => t.priority === 'normal');
+        newQueue = [...otherTasks, ...urgentTasks, task, ...normalTasks];
+      } else {
+        newQueue = [...state.taskQueue, task];
+      }
+      
       localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(newQueue));
       return { taskQueue: newQueue };
     });
 
     get().addLog({
       type: 'task',
-      message: `入库任务已加入队列: ${name} x${quantity} -> ${slotId}`,
+      message: `${priority === 'urgent' ? '[紧急] ' : ''}入库任务已加入队列: ${name} x${quantity} -> ${slotId}`,
       taskId,
       slotId,
       details: { layer, position, goodsName: name, quantity, taskType: 'inbound' },
@@ -374,37 +392,50 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     return taskId;
   },
 
-  addOutboundTask: (layer: number, position: number, quantity: number): string => {
+  addOutboundTask: (layer: number, position: number, quantity: number, priority: TaskPriority = 'normal'): string => {
     const { slots } = get();
     const slot = slots.find(s => s.layer === layer && s.position === position);
     if (!slot || !slot.isOccupied) return '';
 
     const taskId = generateId();
+    const actualQty = Math.min(quantity, slot.quantity);
     const task: OutboundTask = {
       id: taskId,
       type: 'outbound',
       status: 'pending',
+      priority,
       createdAt: Date.now(),
       slotId: slot.id,
       layer,
       position,
       goodsName: slot.goodsName,
-      quantity: Math.min(quantity, slot.quantity),
+      quantity: actualQty,
       totalQuantity: slot.quantity,
     };
 
     set(state => {
-      const newQueue = [...state.taskQueue, task];
+      const pendingTasks = state.taskQueue.filter(t => t.status === 'pending');
+      const otherTasks = state.taskQueue.filter(t => t.status !== 'pending');
+      let newQueue: WarehouseTask[];
+      
+      if (priority === 'urgent') {
+        const urgentTasks = pendingTasks.filter(t => t.priority === 'urgent');
+        const normalTasks = pendingTasks.filter(t => t.priority === 'normal');
+        newQueue = [...otherTasks, ...urgentTasks, task, ...normalTasks];
+      } else {
+        newQueue = [...state.taskQueue, task];
+      }
+      
       localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(newQueue));
       return { taskQueue: newQueue };
     });
 
     get().addLog({
       type: 'task',
-      message: `出库任务已加入队列: ${slot.goodsName} x${quantity} <- ${slot.id}`,
+      message: `${priority === 'urgent' ? '[紧急] ' : ''}出库任务已加入队列: ${slot.goodsName} x${actualQty} <- ${slot.id}`,
       taskId,
       slotId: slot.id,
-      details: { layer, position, goodsName: slot.goodsName, quantity, taskType: 'outbound' },
+      details: { layer, position, goodsName: slot.goodsName, quantity: actualQty, taskType: 'outbound' },
     });
 
     setTimeout(() => get().processNextTask(), 100);
@@ -429,7 +460,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   processNextTask: () => {
     const state = get();
-    if (state.stacker.isBusy || state.stacker.mode !== 'auto') return;
+    if (state.stacker.isBusy || state.stacker.mode !== 'auto' || state.isQueuePaused) return;
 
     const pendingTask = state.taskQueue.find(t => t.status === 'pending');
     if (!pendingTask) return;
@@ -473,9 +504,15 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         }
 
         get().updateTaskStatus(pendingTask.id, 'completed');
+        if (pendingTask.type === 'outbound') {
+          get().recordWaveResult(pendingTask.id, pendingTask.quantity, true);
+        }
       } catch (error) {
         console.error('Task execution failed:', error);
         get().updateTaskStatus(pendingTask.id, 'cancelled');
+        if (pendingTask.type === 'outbound') {
+          get().recordWaveResult(pendingTask.id, 0, false);
+        }
       } finally {
         get().setStackerBusy(false);
         setTimeout(() => get().processNextTask(), 300);
@@ -503,6 +540,167 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       const newQueue = state.taskQueue.filter(t => t.status === 'pending' || t.status === 'running');
       localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(newQueue));
       return { taskQueue: newQueue };
+    });
+  },
+
+  pauseQueue: () => {
+    set({ isQueuePaused: true });
+    get().addLog({
+      type: 'task',
+      message: '作业队列已暂停',
+    });
+  },
+
+  resumeQueue: () => {
+    set({ isQueuePaused: false });
+    get().addLog({
+      type: 'task',
+      message: '作业队列已恢复',
+    });
+    setTimeout(() => get().processNextTask(), 200);
+  },
+
+  moveTaskToFront: (taskId: string) => {
+    set(state => {
+      const task = state.taskQueue.find(t => t.id === taskId);
+      if (!task || task.status !== 'pending') return state;
+      
+      const otherTasks = state.taskQueue.filter(t => t.id !== taskId);
+      const runningTasks = otherTasks.filter(t => t.status === 'running');
+      const pendingTasks = otherTasks.filter(t => t.status === 'pending');
+      const completedTasks = otherTasks.filter(t => t.status === 'completed' || t.status === 'cancelled');
+      
+      const urgentTask = { ...task, priority: 'urgent' as TaskPriority };
+      const newQueue = [...runningTasks, urgentTask, ...pendingTasks, ...completedTasks];
+      localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(newQueue));
+      return { taskQueue: newQueue };
+    });
+    
+    const task = get().taskQueue.find(t => t.id === taskId);
+    if (task) {
+      get().addLog({
+        type: 'task',
+        message: `任务已提升优先级: ${task.goodsName}`,
+        taskId,
+        slotId: task.slotId,
+      });
+    }
+  },
+
+  setLogFilter: (filter: Partial<LogFilter>) => {
+    set(state => ({
+      logFilter: { ...state.logFilter, ...filter },
+    }));
+  },
+
+  createWaveOutbound: (items: { goodsName: string; quantity: number }[]): WaveOutboundResult => {
+    const { slots } = get();
+    const waveId = 'WAVE-' + Date.now().toString(36).toUpperCase();
+    const waveItems: WaveOutboundItem[] = [];
+    const results: WaveOutboundResult['results'] = [];
+
+    items.forEach(item => {
+      const occupiedSlots = slots
+        .filter(s => s.isOccupied && s.goodsName.toLowerCase() === item.goodsName.toLowerCase())
+        .sort((a, b) => b.quantity - a.quantity);
+
+      const totalAvailable = occupiedSlots.reduce((sum, s) => sum + s.quantity, 0);
+      let remaining = item.quantity;
+      const slotAllocations: WaveOutboundItem['slots'] = [];
+
+      occupiedSlots.forEach(slot => {
+        if (remaining <= 0) return;
+        const allocate = Math.min(remaining, slot.quantity);
+        slotAllocations.push({
+          slotId: slot.id,
+          layer: slot.layer,
+          position: slot.position,
+          availableQty: slot.quantity,
+          allocatedQty: allocate,
+        });
+        remaining -= allocate;
+        results.push({
+          slotId: slot.id,
+          goodsName: item.goodsName,
+          actualQty: 0,
+          status: 'success',
+        });
+      });
+
+      waveItems.push({
+        goodsName: item.goodsName,
+        totalAvailable,
+        requestedQuantity: item.quantity,
+        slots: slotAllocations,
+      });
+    });
+
+    const waveResult: WaveOutboundResult = {
+      waveId,
+      items: waveItems,
+      taskIds: [],
+      results,
+    };
+
+    set({ waveOutboundResult: waveResult });
+    return waveResult;
+  },
+
+  executeWaveOutbound: (waveId: string, priority: TaskPriority = 'normal'): string[] => {
+    const state = get();
+    const wave = state.waveOutboundResult;
+    if (!wave || wave.waveId !== waveId) return [];
+
+    const taskIds: string[] = [];
+    wave.items.forEach(item => {
+      item.slots.forEach(slotAlloc => {
+        const taskId = get().addOutboundTask(slotAlloc.layer, slotAlloc.position, slotAlloc.allocatedQty, priority);
+        if (taskId) taskIds.push(taskId);
+      });
+    });
+
+    set(state => ({
+      waveOutboundResult: state.waveOutboundResult ? { ...state.waveOutboundResult, taskIds } : null,
+    }));
+
+    get().addLog({
+      type: 'task',
+      message: `波次出库 ${waveId} 已启动，共 ${taskIds.length} 个任务`,
+      details: { taskType: 'outbound' },
+    });
+
+    return taskIds;
+  },
+
+  setWaveOutboundResult: (result: WaveOutboundResult | null) => {
+    set({ waveOutboundResult: result });
+  },
+
+  recordWaveResult: (taskId: string, actualQty: number, success: boolean) => {
+    set(state => {
+      if (!state.waveOutboundResult) return state;
+      const task = state.taskQueue.find(t => t.id === taskId);
+      if (!task) return state;
+
+      const newResults = state.waveOutboundResult.results.map(r => {
+        if (r.slotId === task.slotId && r.goodsName === task.goodsName) {
+          return { ...r, actualQty: success ? actualQty : 0, status: success ? 'success' : 'failed' };
+        }
+        return r;
+      });
+
+      const allDone = state.waveOutboundResult.taskIds.every(tid => {
+        const t = state.taskQueue.find(t => t.id === tid);
+        return t && (t.status === 'completed' || t.status === 'cancelled');
+      });
+
+      return {
+        waveOutboundResult: {
+          ...state.waveOutboundResult,
+          results: newResults,
+          completedAt: allDone ? Date.now() : undefined,
+        },
+      };
     });
   },
 
@@ -587,10 +785,28 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         }
       }
 
-      set({ slots: newSlots });
+      set({
+        slots: newSlots,
+        taskQueue: [],
+        isQueuePaused: false,
+        highlightedSlotId: null,
+        selectedSlot: null,
+        foundSlots: [],
+        outboundGoodsName: '',
+        modals: {
+          inbound: false,
+          outbound: false,
+          inventory: false,
+          waveOutbound: false,
+        },
+        waveOutboundResult: null,
+      });
+
+      localStorage.removeItem(TASK_STORAGE_KEY);
+
       get().addLog({
         type: 'import',
-        message: `CSV导入完成: 成功${result.success}条, 跳过${result.skipped}条, 错误${result.errors}条`,
+        message: `CSV导入完成: 成功${result.success}条, 跳过${result.skipped}条, 错误${result.errors}条 (已清空旧队列)`,
       });
       get().saveToStorage();
       get().setImportResult(result, true);

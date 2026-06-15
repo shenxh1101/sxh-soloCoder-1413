@@ -9,6 +9,7 @@ import {
   Thermometer,
   Bot,
   Hand,
+  Layers,
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 
@@ -71,6 +72,14 @@ export function ControlPanel() {
           >
             <ArrowUpFromLine className="w-4 h-4" />
             <span className="text-sm font-medium">出库</span>
+          </button>
+
+          <button
+            onClick={() => openModal('waveOutbound')}
+            className="flex items-center gap-2 px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
+          >
+            <Layers className="w-4 h-4" />
+            <span className="text-sm font-medium">波次出库</span>
           </button>
 
           <button

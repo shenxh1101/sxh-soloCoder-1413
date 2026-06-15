@@ -39,11 +39,13 @@ export interface SlotDetailRecord {
 
 export type TaskType = 'inbound' | 'outbound';
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'cancelled';
+export type TaskPriority = 'normal' | 'urgent';
 
 export interface BaseTask {
   id: string;
   type: TaskType;
   status: TaskStatus;
+  priority: TaskPriority;
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
@@ -91,11 +93,33 @@ export interface ImportResult {
   errors: number;
 }
 
+export interface WaveOutboundItem {
+  goodsName: string;
+  totalAvailable: number;
+  requestedQuantity: number;
+  slots: { slotId: string; layer: number; position: number; availableQty: number; allocatedQty: number }[];
+}
+
+export interface WaveOutboundResult {
+  waveId: string;
+  items: WaveOutboundItem[];
+  taskIds: string[];
+  completedAt?: number;
+  results: { slotId: string; goodsName: string; actualQty: number; status: 'success' | 'failed' }[];
+}
+
+export interface LogFilter {
+  types: LogType[];
+  startTime?: number;
+  endTime?: number;
+}
+
 export interface AppState {
   slots: StorageSlot[];
   stacker: StackerState;
   logs: OperationLog[];
   taskQueue: WarehouseTask[];
+  isQueuePaused: boolean;
   showHeatmap: boolean;
   selectedSlot: StorageSlot | null;
   highlightedSlotId: string | null;
@@ -103,11 +127,14 @@ export interface AppState {
     inbound: boolean;
     outbound: boolean;
     inventory: boolean;
+    waveOutbound: boolean;
   };
   outboundGoodsName: string;
   foundSlots: StorageSlot[];
   importResult: ImportResult | null;
   showImportResult: boolean;
+  logFilter: LogFilter;
+  waveOutboundResult: WaveOutboundResult | null;
 }
 
 export interface AppActions {
@@ -126,22 +153,30 @@ export interface AppActions {
   toggleHeatmap: () => void;
   setSelectedSlot: (slot: StorageSlot | null) => void;
   setHighlightedSlotId: (slotId: string | null) => void;
-  openModal: (modal: 'inbound' | 'outbound' | 'inventory') => void;
-  closeModal: (modal: 'inbound' | 'outbound' | 'inventory') => void;
+  openModal: (modal: 'inbound' | 'outbound' | 'inventory' | 'waveOutbound') => void;
+  closeModal: (modal: 'inbound' | 'outbound' | 'inventory' | 'waveOutbound') => void;
   setOutboundGoodsName: (name: string) => void;
   addLog: (log: Omit<OperationLog, 'id' | 'timestamp'>) => void;
-  addInboundTask: (layer: number, position: number, name: string, quantity: number) => string;
-  addOutboundTask: (layer: number, position: number, quantity: number) => string;
+  addInboundTask: (layer: number, position: number, name: string, quantity: number, priority?: TaskPriority) => string;
+  addOutboundTask: (layer: number, position: number, quantity: number, priority?: TaskPriority) => string;
   updateTaskStatus: (taskId: string, status: TaskStatus) => void;
   processNextTask: () => void;
   cancelTask: (taskId: string) => void;
   clearCompletedTasks: () => void;
+  pauseQueue: () => void;
+  resumeQueue: () => void;
+  moveTaskToFront: (taskId: string) => void;
   importCSV: (data: string) => ImportResult;
   exportCSV: () => string;
   setImportResult: (result: ImportResult | null, show: boolean) => void;
   saveToStorage: () => void;
   loadFromStorage: () => void;
   locateLog: (log: OperationLog) => void;
+  setLogFilter: (filter: Partial<LogFilter>) => void;
+  createWaveOutbound: (items: { goodsName: string; quantity: number }[]) => WaveOutboundResult;
+  executeWaveOutbound: (waveId: string, priority?: TaskPriority) => string[];
+  setWaveOutboundResult: (result: WaveOutboundResult | null) => void;
+  recordWaveResult: (taskId: string, actualQty: number, success: boolean) => void;
 }
 
 export const SLOT_CONFIG = {
