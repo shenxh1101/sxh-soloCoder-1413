@@ -11,7 +11,7 @@ export function Stacker() {
   const stacker = useStore(state => state.stacker);
   const setStackerPosition = useStore(state => state.setStackerPosition);
 
-  const moveTo = useCallback(async (x: number, y: number, z: number): Promise<void> => {
+  const moveTo = useCallback(async (x: number, y: number, z: number, pauseCheck?: () => boolean): Promise<{ interrupted: boolean; lastX: number; lastY: number; lastZ: number }> => {
     return new Promise((resolve) => {
       const state = useStore.getState();
       const currentPos = {
@@ -21,11 +21,47 @@ export function Stacker() {
       };
       const targetPos = { x, y, z };
 
+      let horizontalStopped = false;
+      let verticalStopped = false;
+      let lastX = currentPos.x;
+      let lastY = currentPos.y;
+      let lastZ = currentPos.z;
+      let interrupted = false;
+
+      const checkInterval = setInterval(() => {
+        if (pauseCheck && pauseCheck()) {
+          if (!horizontalStopped) {
+            if (horizontalTween.isPlaying()) {
+              horizontalTween.stop();
+              const cs = useStore.getState();
+              lastX = cs.stacker.x;
+              lastZ = cs.stacker.z;
+            }
+            horizontalStopped = true;
+          }
+          if (horizontalStopped && !verticalStopped) {
+            if (verticalTween.isPlaying()) {
+              verticalTween.stop();
+              const cs = useStore.getState();
+              lastY = cs.stacker.y;
+            }
+            verticalStopped = true;
+          }
+          if (horizontalStopped && verticalStopped) {
+            clearInterval(checkInterval);
+            interrupted = true;
+            resolve({ interrupted, lastX, lastY, lastZ });
+          }
+        }
+      }, 30);
+
       const horizontalTween = new TWEEN.Tween({ x: currentPos.x, z: currentPos.z })
         .to({ x: targetPos.x, z: targetPos.z }, 1500)
         .easing(TWEEN.Easing.Cubic.InOut)
         .onUpdate((val) => {
           const currentState = useStore.getState();
+          lastX = val.x;
+          lastZ = val.z;
           setStackerPosition(val.x, currentState.stacker.y, val.z);
         });
 
@@ -34,14 +70,25 @@ export function Stacker() {
         .easing(TWEEN.Easing.Cubic.InOut)
         .onUpdate((val) => {
           const currentState = useStore.getState();
+          lastY = val.y;
           setStackerPosition(currentState.stacker.x, val.y, currentState.stacker.z);
         });
 
       horizontalTween.start();
       horizontalTween.onComplete(() => {
+        horizontalStopped = true;
+        if (verticalStopped || (pauseCheck && pauseCheck())) {
+          clearInterval(checkInterval);
+          interrupted = true;
+          resolve({ interrupted, lastX, lastY, lastZ });
+          return;
+        }
         verticalTween.start();
         verticalTween.onComplete(() => {
-          resolve();
+          verticalStopped = true;
+          clearInterval(checkInterval);
+          const cs = useStore.getState();
+          resolve({ interrupted: false, lastX: cs.stacker.x, lastY: cs.stacker.y, lastZ: cs.stacker.z });
         });
       });
     });

@@ -224,6 +224,12 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     get().addLog({
       type: 'check',
       message: `盘点完成，共 ${records.length} 种货物，${occupiedSlots.length} 个货位`,
+      slotIds: occupiedSlots.slice(0, 15).map(s => s.id),
+      details: {
+        totalRecords: occupiedSlots.length,
+        changedCount: records.length,
+        summary: `${records.length} 种货物 / ${occupiedSlots.length} 个占用货位 / ${totalGoods} 件总库存`,
+      },
     });
     return records;
   },
@@ -492,66 +498,176 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   processNextTask: () => {
     const state = get();
-    if (state.stacker.isBusy || state.stacker.mode !== 'auto' || state.isQueuePaused) return;
+    if (state.stacker.isBusy || state.stacker.mode !== 'auto') return;
+
+    const pausedTask = state.taskQueue.find(t => t.status === 'paused');
+    if (pausedTask && !state.isQueuePaused) {
+      get().resumePausedTask(pausedTask.id);
+      return;
+    }
+
+    if (state.isQueuePaused) return;
 
     const pendingTask = state.taskQueue.find(t => t.status === 'pending');
     if (!pendingTask) return;
 
-    const moveStackerTo = (window as unknown as { moveStackerTo?: (x: number, y: number, z: number) => Promise<void> }).moveStackerTo;
+    const moveStackerTo = (window as unknown as { moveStackerTo?: (x: number, y: number, z: number, pauseCheck?: () => boolean) => Promise<{ interrupted: boolean; lastX: number; lastY: number; lastZ: number }> }).moveStackerTo;
     if (!moveStackerTo) return;
 
     get().updateTaskStatus(pendingTask.id, 'running');
     get().setStackerBusy(true);
 
-    const executeTask = async () => {
-      try {
-        const targetSlot = state.slots.find(s => s.id === pendingTask.slotId);
-        if (!targetSlot) {
-          get().updateTaskStatus(pendingTask.id, 'cancelled');
+    get().executeTaskFromPhase(pendingTask.id, 'moving_to_slot');
+  },
+
+  resumePausedTask: (taskId: string) => {
+    const state = get();
+    const task = state.taskQueue.find(t => t.id === taskId);
+    if (!task || task.status !== 'paused' || !task.pausedAt) return;
+
+    const moveStackerTo = (window as unknown as { moveStackerTo?: (x: number, y: number, z: number, pauseCheck?: () => boolean) => Promise<{ interrupted: boolean; lastX: number; lastY: number; lastZ: number }> }).moveStackerTo;
+    if (!moveStackerTo) return;
+
+    get().updateTaskStatus(taskId, 'running');
+    get().setStackerBusy(true);
+
+    get().addLog({
+      type: 'task',
+      message: `任务断点恢复: ${task.type === 'inbound' ? '入库' : '出库'} ${task.goodsName} (阶段: ${task.pausedAt.phase})`,
+      taskId,
+      slotId: task.slotId,
+    });
+
+    get().executeTaskFromPhase(taskId, task.pausedAt.phase);
+  },
+
+  executeTaskFromPhase: async (taskId: string, startPhase: TaskExecutionPhase) => {
+    const moveStackerTo = (window as unknown as { moveStackerTo?: (x: number, y: number, z: number, pauseCheck?: () => boolean) => Promise<{ interrupted: boolean; lastX: number; lastY: number; lastZ: number }> }).moveStackerTo;
+    if (!moveStackerTo) return;
+
+    const createPauseCheck = () => () => get().pauseRequested;
+
+    const state0 = get();
+    const task = state0.taskQueue.find(t => t.id === taskId);
+    if (!task) return;
+
+    const targetSlot = state0.slots.find(s => s.id === task.slotId);
+    if (!targetSlot) {
+      get().updateTaskStatus(taskId, 'cancelled');
+      get().setStackerBusy(false);
+      setTimeout(() => get().processNextTask(), 200);
+      return;
+    }
+
+    const phases: TaskExecutionPhase[] = task.type === 'inbound'
+      ? ['moving_to_slot', 'moving_home']
+      : ['moving_to_slot', 'moving_to_output', 'moving_home'];
+
+    const startIdx = phases.indexOf(startPhase);
+    let taskFailed = false;
+    let waveRecorded = false;
+
+    try {
+      for (let i = startIdx; i < phases.length; i++) {
+        const phase = phases[i];
+        get().updateTaskExecutionPhase(taskId, phase);
+
+        if (get().pauseRequested) {
+          get().updateTaskStatus(taskId, 'paused', phase);
+          get().set({ pauseRequested: false, isQueuePaused: true });
           get().setStackerBusy(false);
-          setTimeout(() => get().processNextTask(), 200);
           return;
         }
 
-        if (pendingTask.type === 'inbound') {
-          await moveStackerTo(targetSlot.x - 2, targetSlot.y, targetSlot.z);
-          get().setStackerHasGoods(true, { name: pendingTask.goodsName, quantity: pendingTask.quantity });
-          await new Promise(r => setTimeout(r, 400));
-          get().addGoods(pendingTask.layer, pendingTask.position, pendingTask.goodsName, pendingTask.quantity);
-          get().setStackerHasGoods(false);
+        if (phase === 'moving_to_slot') {
+          const result = await moveStackerTo(targetSlot.x - 2, targetSlot.y, targetSlot.z, createPauseCheck());
+          if (result.interrupted) {
+            get().updateTaskStatus(taskId, 'paused', phase);
+            get().set({ pauseRequested: false, isQueuePaused: true });
+            get().setStackerBusy(false);
+            return;
+          }
+
           await new Promise(r => setTimeout(r, 300));
-          await moveStackerTo(STACKER_CONFIG.HOME_X, STACKER_CONFIG.HOME_Y, STACKER_CONFIG.HOME_Z);
-        } else {
-          await moveStackerTo(targetSlot.x - 2, targetSlot.y, targetSlot.z);
-          await new Promise(r => setTimeout(r, 300));
-          const outboundQty = pendingTask.quantity;
-          get().setStackerHasGoods(true, { name: pendingTask.goodsName, quantity: outboundQty });
-          get().removeGoodsPartial(pendingTask.layer, pendingTask.position, outboundQty);
-          await new Promise(r => setTimeout(r, 400));
-          await moveStackerTo(STACKER_CONFIG.OUTPUT_X, STACKER_CONFIG.OUTPUT_Y, STACKER_CONFIG.OUTPUT_Z);
-          await new Promise(r => setTimeout(r, 300));
-          get().setStackerHasGoods(false);
-          await new Promise(r => setTimeout(r, 300));
-          await moveStackerTo(STACKER_CONFIG.HOME_X, STACKER_CONFIG.HOME_Y, STACKER_CONFIG.HOME_Z);
+          if (get().pauseRequested) {
+            get().updateTaskStatus(taskId, 'paused', phase);
+            get().set({ pauseRequested: false, isQueuePaused: true });
+            get().setStackerBusy(false);
+            return;
+          }
+
+          if (task.type === 'inbound') {
+            get().setStackerHasGoods(true, { name: task.goodsName, quantity: task.quantity });
+            await new Promise(r => setTimeout(r, 400));
+            get().addGoods(task.layer, task.position, task.goodsName, task.quantity);
+            get().setStackerHasGoods(false);
+            await new Promise(r => setTimeout(r, 300));
+          } else {
+            const outboundQty = task.quantity;
+            get().setStackerHasGoods(true, { name: task.goodsName, quantity: outboundQty });
+            get().removeGoodsPartial(task.layer, task.position, outboundQty);
+            await new Promise(r => setTimeout(r, 400));
+          }
         }
 
-        get().updateTaskStatus(pendingTask.id, 'completed');
-        if (pendingTask.type === 'outbound') {
-          get().recordWaveResult(pendingTask.id, pendingTask.quantity, true);
+        if (phase === 'moving_to_output') {
+          const result = await moveStackerTo(STACKER_CONFIG.OUTPUT_X, STACKER_CONFIG.OUTPUT_Y, STACKER_CONFIG.OUTPUT_Z, createPauseCheck());
+          if (result.interrupted) {
+            get().updateTaskStatus(taskId, 'paused', phase);
+            get().set({ pauseRequested: false, isQueuePaused: true });
+            get().setStackerBusy(false);
+            return;
+          }
+
+          await new Promise(r => setTimeout(r, 300));
+          if (get().pauseRequested) {
+            get().updateTaskStatus(taskId, 'paused', phase);
+            get().set({ pauseRequested: false, isQueuePaused: true });
+            get().setStackerBusy(false);
+            return;
+          }
+
+          get().setStackerHasGoods(false);
+          await new Promise(r => setTimeout(r, 300));
         }
-      } catch (error) {
-        console.error('Task execution failed:', error);
-        get().updateTaskStatus(pendingTask.id, 'cancelled');
-        if (pendingTask.type === 'outbound') {
-          get().recordWaveResult(pendingTask.id, 0, false);
+
+        if (phase === 'moving_home') {
+          const result = await moveStackerTo(STACKER_CONFIG.HOME_X, STACKER_CONFIG.HOME_Y, STACKER_CONFIG.HOME_Z, createPauseCheck());
+          if (result.interrupted) {
+            get().updateTaskStatus(taskId, 'paused', phase);
+            get().set({ pauseRequested: false, isQueuePaused: true });
+            get().setStackerBusy(false);
+            return;
+          }
         }
-      } finally {
-        get().setStackerBusy(false);
+
+        if (get().pauseRequested) {
+          get().updateTaskStatus(taskId, 'paused', phase);
+          get().set({ pauseRequested: false, isQueuePaused: true });
+          get().setStackerBusy(false);
+          return;
+        }
+      }
+
+      get().updateTaskStatus(taskId, 'completed');
+      if (task.type === 'outbound') {
+        get().recordWaveResult(taskId, task.quantity, true);
+        waveRecorded = true;
+      }
+    } catch (error) {
+      console.error('Task execution failed:', error);
+      taskFailed = true;
+      get().updateTaskStatus(taskId, 'cancelled');
+      if (task.type === 'outbound' && !waveRecorded) {
+        get().recordWaveResult(taskId, 0, false);
+      }
+    } finally {
+      get().setStackerBusy(false);
+      const currentState = get();
+      if (!currentState.isQueuePaused) {
         setTimeout(() => get().processNextTask(), 300);
       }
-    };
-
-    executeTask();
+    }
   },
 
   cancelTask: (taskId: string) => {
@@ -569,27 +685,53 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   clearCompletedTasks: () => {
     set(state => {
-      const newQueue = state.taskQueue.filter(t => t.status === 'pending' || t.status === 'running');
+      const newQueue = state.taskQueue.filter(t => t.status === 'pending' || t.status === 'running' || t.status === 'paused');
       localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(newQueue));
       return { taskQueue: newQueue };
     });
   },
 
   pauseQueue: () => {
-    set({ isQueuePaused: true });
-    get().addLog({
-      type: 'task',
-      message: '作业队列已暂停',
-    });
+    const state = get();
+    const runningTask = state.taskQueue.find(t => t.status === 'running');
+
+    if (runningTask && state.stacker.isBusy) {
+      set({ pauseRequested: true });
+      get().addLog({
+        type: 'task',
+        message: `暂停请求已发送: 正在中断任务 ${runningTask.type === 'inbound' ? '入库' : '出库'} ${runningTask.goodsName}`,
+        taskId: runningTask.id,
+        slotId: runningTask.slotId,
+      });
+    } else {
+      set({ isQueuePaused: true });
+      get().addLog({
+        type: 'task',
+        message: '作业队列已暂停',
+      });
+    }
   },
 
   resumeQueue: () => {
-    set({ isQueuePaused: false });
-    get().addLog({
-      type: 'task',
-      message: '作业队列已恢复',
-    });
-    setTimeout(() => get().processNextTask(), 200);
+    const state = get();
+    set({ isQueuePaused: false, pauseRequested: false });
+
+    const pausedTask = state.taskQueue.find(t => t.status === 'paused');
+    if (pausedTask) {
+      get().addLog({
+        type: 'task',
+        message: `作业队列已恢复: 从断点继续任务 ${pausedTask.goodsName}`,
+        taskId: pausedTask.id,
+        slotId: pausedTask.slotId,
+      });
+      setTimeout(() => get().processNextTask(), 200);
+    } else {
+      get().addLog({
+        type: 'task',
+        message: '作业队列已恢复',
+      });
+      setTimeout(() => get().processNextTask(), 200);
+    }
   },
 
   moveTaskToFront: (taskId: string) => {
@@ -781,6 +923,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         }
       }
 
+      const currentSlots = state.slots;
+      const currentTasks = state.taskQueue;
+      const changedSlotIds: string[] = [];
+      const cancelledTaskIds: string[] = [];
+
       for (let i = 1; i < lines.length; i++) {
         const values = lines[i].split(',').map(v => v.trim());
         if (values.length < 4) {
@@ -805,23 +952,46 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
         const slotIndex = newSlots.findIndex(s => s.layer === layer && s.position === position);
         if (slotIndex !== -1 && !newSlots[slotIndex].isOccupied) {
+          const slotId = `L${layer}-P${position}`;
+          const oldSlot = currentSlots.find(s => s.id === slotId);
+          const wasOccupied = oldSlot?.isOccupied;
           newSlots[slotIndex] = {
             ...newSlots[slotIndex],
             isOccupied: true,
             goodsName,
             quantity,
           };
+          if (!wasOccupied || oldSlot?.goodsName !== goodsName || oldSlot?.quantity !== quantity) {
+            changedSlotIds.push(slotId);
+          }
           result.success++;
         } else {
           result.skipped++;
         }
       }
 
+      currentSlots.forEach(slot => {
+        if (slot.isOccupied) {
+          const newSlot = newSlots.find(ns => ns.id === slot.id);
+          if (!newSlot?.isOccupied && !changedSlotIds.includes(slot.id)) {
+            changedSlotIds.push(slot.id);
+          }
+        }
+      });
+
+      currentTasks.forEach(task => {
+        if (task.status === 'pending' || task.status === 'paused') {
+          cancelledTaskIds.push(task.id);
+        }
+      });
+
       set({
         slots: newSlots,
         taskQueue: [],
         isQueuePaused: false,
+        pauseRequested: false,
         highlightedSlotId: null,
+        highlightedTaskId: null,
         selectedSlot: null,
         foundSlots: [],
         outboundGoodsName: '',
@@ -836,9 +1006,18 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
       localStorage.removeItem(TASK_STORAGE_KEY);
 
+      const summary = `成功${result.success}条, 跳过${result.skipped}条, 错误${result.errors}条, 货位变更${changedSlotIds.length}个, 清理任务${cancelledTaskIds.length}个`;
       get().addLog({
         type: 'import',
-        message: `CSV导入完成: 成功${result.success}条, 跳过${result.skipped}条, 错误${result.errors}条 (已清空旧队列)`,
+        message: `CSV换仓完成: ${summary}`,
+        slotIds: changedSlotIds.slice(0, 10),
+        taskIds: cancelledTaskIds,
+        details: {
+          totalRecords: lines.length - 1,
+          changedCount: changedSlotIds.length,
+          cancelledCount: cancelledTaskIds.length,
+          summary,
+        },
       });
       get().saveToStorage();
       get().setImportResult(result, true);
@@ -898,6 +1077,32 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       if (slot) {
         get().setSelectedSlot(slot);
       }
+      setTimeout(() => get().setHighlightedSlotId(null), 5000);
     }
+    if (log.slotIds && log.slotIds.length > 0) {
+      get().setHighlightedSlotId(log.slotIds[0]);
+      const slot = get().slots.find(s => s.id === log.slotIds![0]);
+      if (slot) {
+        get().setSelectedSlot(slot);
+      }
+      setTimeout(() => get().setHighlightedSlotId(null), 5000);
+    }
+    if (log.taskId) {
+      get().setHighlightedTaskId(log.taskId);
+      setTimeout(() => get().setHighlightedTaskId(null), 5000);
+    }
+    if (log.taskIds && log.taskIds.length > 0) {
+      get().setHighlightedTaskId(log.taskIds[0]);
+      setTimeout(() => get().setHighlightedTaskId(null), 5000);
+    }
+  },
+
+  getSlotOperationHistory: (slotId: string): OperationLog[] => {
+    const state = get();
+    return state.logs.filter(log =>
+      log.slotId === slotId ||
+      (log.slotIds && log.slotIds.includes(slotId)) ||
+      (log.taskId && state.taskQueue.find(t => t.id === log.taskId)?.slotId === slotId)
+    ).slice(0, 20);
   },
 }));

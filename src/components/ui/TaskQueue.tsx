@@ -12,9 +12,17 @@ import {
   Play,
   AlertTriangle,
   ChevronUp,
+  PauseCircle,
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
-import { WarehouseTask, TaskStatus, TaskPriority } from '../../types';
+import { WarehouseTask, TaskStatus, TaskPriority, TaskExecutionPhase } from '../../types';
+
+const phaseLabels: Record<TaskExecutionPhase, string> = {
+  idle: '待机',
+  moving_to_slot: '移向货位',
+  moving_to_output: '移向出库口',
+  moving_home: '返回原点',
+};
 
 const statusConfig: Record<TaskStatus, { label: string; icon: React.ReactNode; color: string; bg: string }> = {
   pending: {
@@ -28,6 +36,12 @@ const statusConfig: Record<TaskStatus, { label: string; icon: React.ReactNode; c
     icon: <Loader2 className="w-3 h-3 animate-spin" />,
     color: 'text-blue-400',
     bg: 'bg-blue-500/20',
+  },
+  paused: {
+    label: '已暂停',
+    icon: <PauseCircle className="w-3 h-3" />,
+    color: 'text-amber-400',
+    bg: 'bg-amber-500/20',
   },
   completed: {
     label: '已完成',
@@ -59,31 +73,40 @@ const priorityConfig: Record<TaskPriority, { label: string; color: string; bg: s
 export function TaskQueue() {
   const taskQueue = useStore(state => state.taskQueue);
   const isQueuePaused = useStore(state => state.isQueuePaused);
+  const pauseRequested = useStore(state => state.pauseRequested);
+  const highlightedTaskId = useStore(state => state.highlightedTaskId);
   const cancelTask = useStore(state => state.cancelTask);
   const clearCompletedTasks = useStore(state => state.clearCompletedTasks);
   const pauseQueue = useStore(state => state.pauseQueue);
   const resumeQueue = useStore(state => state.resumeQueue);
   const moveTaskToFront = useStore(state => state.moveTaskToFront);
   const setHighlightedSlotId = useStore(state => state.setHighlightedSlotId);
+  const stacker = useStore(state => state.stacker);
 
-  const activeTasks = taskQueue.filter(t => t.status === 'pending' || t.status === 'running');
+  const activeTasks = taskQueue.filter(t => t.status === 'pending' || t.status === 'running' || t.status === 'paused');
   const recentCompleted = taskQueue.filter(t => t.status === 'completed' || t.status === 'cancelled').slice(0, 5);
   const hasCompleted = recentCompleted.length > 0;
   const pendingCount = activeTasks.filter(t => t.status === 'pending').length;
   const runningCount = activeTasks.filter(t => t.status === 'running').length;
+  const pausedCount = activeTasks.filter(t => t.status === 'paused').length;
 
   const renderTaskItem = (task: WarehouseTask, idx: number, total: number) => {
     const status = statusConfig[task.status];
     const priority = priorityConfig[task.priority];
     const isInbound = task.type === 'inbound';
     const isUrgent = task.priority === 'urgent';
+    const isHighlighted = highlightedTaskId === task.id;
 
     return (
       <div
         key={task.id}
         className={`flex items-center gap-2 p-2 rounded-lg text-xs transition-all ${
-          task.status === 'running'
+          isHighlighted
+            ? 'bg-purple-500/30 border-2 border-purple-400 shadow-lg shadow-purple-500/30 ring-2 ring-purple-400/50'
+            : task.status === 'running'
             ? 'bg-blue-500/20 border border-blue-500/50'
+            : task.status === 'paused'
+            ? 'bg-amber-500/15 border border-amber-500/40'
             : task.status === 'pending'
             ? isUrgent
               ? 'bg-red-500/10 border border-red-500/30 hover:bg-red-500/15'
@@ -113,10 +136,10 @@ export function TaskQueue() {
             <span className="truncate">{task.goodsName}</span>
             <span className="text-orange-400">x{task.quantity}</span>
           </div>
-          <div className="flex items-center gap-1 text-gray-400">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setHighlightedSlotId(task.slotId)}
-              className="font-mono hover:text-blue-400 transition-colors"
+              className="font-mono hover:text-blue-400 transition-colors text-gray-400"
               title="点击定位货位"
             >
               {task.slotId}
@@ -124,6 +147,18 @@ export function TaskQueue() {
             {task.type === 'outbound' && (task as { totalQuantity?: number }).totalQuantity && (
               <span className="text-gray-500">
                 /{(task as { totalQuantity: number }).totalQuantity}
+              </span>
+            )}
+            {task.status === 'paused' && task.pausedAt && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-500/30 text-amber-300 text-[10px]">
+                <PauseCircle className="w-2.5 h-2.5" />
+                断点: {phaseLabels[task.pausedAt.phase]}
+              </span>
+            )}
+            {task.status === 'running' && task.executionPhase && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-blue-500/30 text-blue-300 text-[10px]">
+                <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                {phaseLabels[task.executionPhase]}
               </span>
             )}
           </div>
@@ -134,9 +169,9 @@ export function TaskQueue() {
           <span>{status.label}</span>
         </div>
 
-        {task.status === 'pending' && (
+        {(task.status === 'pending' || task.status === 'paused') && (
           <div className="flex items-center gap-1 flex-shrink-0">
-            {!isUrgent && (
+            {task.status === 'pending' && !isUrgent && (
               <button
                 onClick={() => moveTaskToFront(task.id)}
                 className="p-1 text-gray-500 hover:text-yellow-400 hover:bg-yellow-500/10 rounded transition-colors"
@@ -168,12 +203,12 @@ export function TaskQueue() {
             <ListTodo className="w-5 h-5 text-purple-400" />
             <span>作业队列</span>
             <span className="text-xs text-gray-400 font-normal">
-              ({runningCount} 执行中 · {pendingCount} 等待)
+              ({runningCount} 执行中{pausedCount > 0 && ` · ${pausedCount} 暂停`} · {pendingCount} 等待)
             </span>
             {isQueuePaused && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-500/30 text-yellow-300 text-xs animate-pulse">
+              <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${pauseRequested ? 'bg-orange-500/30 text-orange-300 animate-pulse' : 'bg-yellow-500/30 text-yellow-300 animate-pulse'}`}>
                 <Pause className="w-3 h-3" />
-                已暂停
+                {pauseRequested ? '正在暂停...' : '已暂停'}
               </span>
             )}
           </div>
@@ -210,6 +245,15 @@ export function TaskQueue() {
             )}
           </div>
         </div>
+
+        {stacker.hasGoods && (runningCount > 0 || pausedCount > 0) && (
+          <div className="mb-2 p-2 rounded-lg bg-orange-500/10 border border-orange-500/30 text-xs flex items-center gap-2">
+            <span className="text-orange-400">📦</span>
+            <span className="text-orange-300">
+              堆垛机携带: {stacker.currentGoods?.name || '未知'} x{stacker.currentGoods?.quantity || 0}
+            </span>
+          </div>
+        )}
 
         <div className="space-y-2 max-h-64 overflow-y-auto">
           {activeTasks.length > 0 && (

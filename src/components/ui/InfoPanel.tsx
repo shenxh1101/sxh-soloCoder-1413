@@ -1,4 +1,4 @@
-import { Package, MapPin, Clock, Activity, Keyboard, ArrowDownToLine, ArrowUpFromLine, Upload, Download, ClipboardCheck, Settings, Target, Bot, Hand, Filter, RotateCcw } from 'lucide-react';
+import { Package, MapPin, Clock, Activity, Keyboard, ArrowDownToLine, ArrowUpFromLine, Upload, Download, ClipboardCheck, Settings, Target, Bot, Hand, Filter, RotateCcw, ChevronDown, ChevronRight, ListTodo, Map, FileText } from 'lucide-react';
 import { useState, useMemo } from 'react';
 import { useStore } from '../../store/useStore';
 import { SLOT_CONFIG, HEATMAP_COLORS, OperationLog, LogType } from '../../types';
@@ -79,6 +79,31 @@ export function InfoPanel() {
 
   const handleLogClick = (log: OperationLog) => {
     locateLog(log);
+  };
+
+  const toggleLogExpanded = useStore(state => state.toggleLogExpanded);
+  const taskQueue = useStore(state => state.taskQueue);
+  const getSlotOperationHistory = useStore(state => state.getSlotOperationHistory);
+  const setHighlightedSlotId = useStore(state => state.setHighlightedSlotId);
+  const setHighlightedTaskId = useStore(state => state.setHighlightedTaskId);
+  const setSelectedSlot = useStore(state => state.setSelectedSlot);
+
+  const handleLocateSlot = (slotId: string) => {
+    const slot = slots.find(s => s.id === slotId);
+    if (slot) {
+      setSelectedSlot(slot);
+      setHighlightedSlotId(slotId);
+      setTimeout(() => setHighlightedSlotId(null), 5000);
+    }
+  };
+
+  const handleLocateTask = (taskId: string) => {
+    setHighlightedTaskId(taskId);
+    setTimeout(() => setHighlightedTaskId(null), 5000);
+    const task = taskQueue.find(t => t.id === taskId);
+    if (task) {
+      handleLocateSlot(task.slotId);
+    }
   };
 
   const toggleTypeFilter = (type: LogType) => {
@@ -341,43 +366,288 @@ export function InfoPanel() {
               ) : (
                 filteredLogs.slice(0, 30).map((log, idx) => {
                   const config = logTypeConfig[log.type];
-                  const canLocate = !!log.slotId || !!log.taskId;
+                  const canLocate = !!log.slotId || !!log.taskId || (!!log.slotIds && log.slotIds.length > 0) || (!!log.taskIds && log.taskIds.length > 0);
+                  const hasDetails = !!log.slotId || !!log.taskId || (!!log.slotIds && log.slotIds.length > 0) || (!!log.taskIds && log.taskIds.length > 0) || log.details;
+                  const isExpanded = log.expanded;
+                  const relatedSlotIds = Array.from(new Set([log.slotId, ...(log.slotIds || [])].filter(Boolean) as string[]));
+                  const relatedTaskIds = Array.from(new Set([log.taskId, ...(log.taskIds || [])].filter(Boolean) as string[]));
+                  const slotHistory = log.slotId ? getSlotOperationHistory(log.slotId) : [];
+
                   return (
                     <div
                       key={log.id}
-                      onClick={() => canLocate && handleLogClick(log)}
-                      className={`group text-xs p-1.5 rounded transition-all ${
-                        canLocate
-                          ? 'cursor-pointer hover:bg-white/10 hover:translate-x-0.5'
-                          : ''
-                      } ${idx === 0 ? 'bg-white/5' : ''}`}
+                      className={`group text-xs rounded transition-all ${idx === 0 ? 'bg-white/5' : ''} ${isExpanded ? 'bg-white/10' : ''}`}
                     >
-                      <div className="flex items-start gap-1.5">
-                        <div className={`mt-0.5 ${config.color} opacity-70`}>
-                          {config.icon}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1">
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${config.color} bg-white/10`}>
-                              {config.label}
-                            </span>
+                      <div
+                        className={`p-1.5 ${canLocate ? 'cursor-pointer hover:bg-white/5 hover:translate-x-0.5' : ''}`}
+                        onClick={() => {
+                          if (canLocate) handleLogClick(log);
+                          if (hasDetails) toggleLogExpanded(log.id);
+                        }}
+                      >
+                        <div className="flex items-start gap-1.5">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (hasDetails) toggleLogExpanded(log.id);
+                            }}
+                            className={`mt-0.5 w-4 h-4 flex items-center justify-center flex-shrink-0 rounded ${hasDetails ? 'text-gray-400 hover:text-white hover:bg-white/10' : 'invisible'}`}
+                          >
+                            {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                          </button>
+                          <div className={`mt-0.5 ${config.color} opacity-70`}>
+                            {config.icon}
                           </div>
-                          <div className="text-gray-300 break-words leading-snug mt-0.5">
-                            {log.message}
-                          </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-gray-600">
-                              {formatDate(log.timestamp)} {formatTime(log.timestamp)}
-                            </span>
-                            {canLocate && (
-                              <span className="inline-flex items-center gap-0.5 text-blue-400/70 group-hover:text-blue-400 transition-colors">
-                                <Target className="w-2.5 h-2.5" />
-                                定位
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${config.color} bg-white/10`}>
+                                {config.label}
                               </span>
-                            )}
+                              {relatedSlotIds.length > 0 && (
+                                <span className="flex items-center gap-0.5 text-[10px] text-gray-500">
+                                  <Map className="w-2.5 h-2.5" />
+                                  {relatedSlotIds.length}
+                                </span>
+                              )}
+                              {relatedTaskIds.length > 0 && (
+                                <span className="flex items-center gap-0.5 text-[10px] text-gray-500">
+                                  <ListTodo className="w-2.5 h-2.5" />
+                                  {relatedTaskIds.length}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-gray-300 break-words leading-snug mt-0.5">
+                              {log.message}
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="text-gray-600">
+                                {formatDate(log.timestamp)} {formatTime(log.timestamp)}
+                              </span>
+                              {canLocate && (
+                                <span className="inline-flex items-center gap-0.5 text-blue-400/70 group-hover:text-blue-400 transition-colors">
+                                  <Target className="w-2.5 h-2.5" />
+                                  定位
+                                </span>
+                              )}
+                              {hasDetails && (
+                                <span className="inline-flex items-center gap-0.5 text-purple-400/70">
+                                  <FileText className="w-2.5 h-2.5" />
+                                  {isExpanded ? '收起' : '详情'}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
+
+                      {isExpanded && hasDetails && (
+                        <div className="mx-2 mb-1.5 p-2 bg-black/30 rounded-lg border-l-2 border-purple-500/50 space-y-2" onClick={(e) => e.stopPropagation()}>
+                          {log.details && (
+                            <div className="space-y-0.5 text-[11px]">
+                              <div className="text-gray-500 font-medium mb-1 flex items-center gap-1">
+                                <FileText className="w-3 h-3" />
+                                详细信息
+                              </div>
+                              {log.details.summary && (
+                                <div className="text-gray-300 bg-white/5 px-2 py-1 rounded">
+                                  {log.details.summary}
+                                </div>
+                              )}
+                              {log.details.goodsName && (
+                                <div className="flex items-center justify-between px-2 py-0.5">
+                                  <span className="text-gray-500">货物名称</span>
+                                  <span className="text-white font-medium">{log.details.goodsName}</span>
+                                </div>
+                              )}
+                              {log.details.quantity !== undefined && (
+                                <div className="flex items-center justify-between px-2 py-0.5">
+                                  <span className="text-gray-500">数量</span>
+                                  <span className="text-orange-400 font-mono">x{log.details.quantity}</span>
+                                </div>
+                              )}
+                              {log.details.layer !== undefined && log.details.position !== undefined && (
+                                <div className="flex items-center justify-between px-2 py-0.5">
+                                  <span className="text-gray-500">目标货位</span>
+                                  <span
+                                    onClick={() => handleLocateSlot(`L${log.details!.layer}-P${log.details!.position}`)}
+                                    className="text-blue-400 font-mono cursor-pointer hover:text-blue-300 hover:underline"
+                                  >
+                                    L{log.details.layer}-P{log.details.position}
+                                  </span>
+                                </div>
+                              )}
+                              {log.details.taskType && (
+                                <div className="flex items-center justify-between px-2 py-0.5">
+                                  <span className="text-gray-500">任务类型</span>
+                                  <span className="text-white">{log.details.taskType === 'inbound' ? '入库' : '出库'}</span>
+                                </div>
+                              )}
+                              {log.details.totalRecords !== undefined && (
+                                <div className="flex items-center justify-between px-2 py-0.5">
+                                  <span className="text-gray-500">记录总数</span>
+                                  <span className="text-gray-300">{log.details.totalRecords} 条</span>
+                                </div>
+                              )}
+                              {log.details.changedCount !== undefined && (
+                                <div className="flex items-center justify-between px-2 py-0.5">
+                                  <span className="text-gray-500">货位变更</span>
+                                  <span className="text-yellow-400">{log.details.changedCount} 个</span>
+                                </div>
+                              )}
+                              {log.details.cancelledCount !== undefined && (
+                                <div className="flex items-center justify-between px-2 py-0.5">
+                                  <span className="text-gray-500">清理任务</span>
+                                  <span className="text-red-400">{log.details.cancelledCount} 个</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {relatedSlotIds.length > 0 && (
+                            <div className="space-y-0.5 text-[11px]">
+                              <div className="text-gray-500 font-medium mb-1 flex items-center gap-1">
+                                <Map className="w-3 h-3" />
+                                相关货位 ({relatedSlotIds.length})
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {relatedSlotIds.slice(0, 15).map(slotId => {
+                                  const slot = slots.find(s => s.id === slotId);
+                                  return (
+                                    <button
+                                      key={slotId}
+                                      onClick={() => handleLocateSlot(slotId)}
+                                      className={`px-1.5 py-0.5 rounded font-mono text-[10px] transition-all ${
+                                        slot?.isOccupied
+                                          ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                                          : 'bg-gray-500/20 text-gray-400 hover:bg-gray-500/30'
+                                      }`}
+                                    >
+                                      {slotId}
+                                      {slot?.isOccupied && <span className="opacity-60"> ({slot.quantity})</span>}
+                                    </button>
+                                  );
+                                })}
+                                {relatedSlotIds.length > 15 && (
+                                  <span className="text-gray-500 px-1.5 py-0.5 text-[10px]">
+                                    +{relatedSlotIds.length - 15}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {relatedTaskIds.length > 0 && (
+                            <div className="space-y-0.5 text-[11px]">
+                              <div className="text-gray-500 font-medium mb-1 flex items-center gap-1">
+                                <ListTodo className="w-3 h-3" />
+                                关联任务 ({relatedTaskIds.length})
+                              </div>
+                              <div className="flex flex-col gap-0.5 max-h-20 overflow-y-auto">
+                                {relatedTaskIds.slice(0, 10).map(taskId => {
+                                  const task = taskQueue.find(t => t.id === taskId);
+                                  return (
+                                    <button
+                                      key={taskId}
+                                      onClick={() => handleLocateTask(taskId)}
+                                      className="flex items-center justify-between gap-2 px-1.5 py-0.5 rounded bg-white/5 hover:bg-white/10 text-left transition-all"
+                                    >
+                                      <div className="flex items-center gap-1 min-w-0">
+                                        <span className={task?.type === 'inbound' ? 'text-green-400' : 'text-orange-400'}>
+                                          {task?.type === 'inbound' ? '↓' : '↑'}
+                                        </span>
+                                        <span className="text-gray-300 truncate">{task?.goodsName || '任务'}</span>
+                                      </div>
+                                      <div className="flex items-center gap-1 flex-shrink-0">
+                                        <span className="text-gray-500 font-mono text-[10px]">
+                                          {task?.slotId}
+                                        </span>
+                                        <span className={`px-1 rounded text-[10px] ${
+                                          task?.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+                                          task?.status === 'running' ? 'bg-blue-500/20 text-blue-400' :
+                                          task?.status === 'paused' ? 'bg-amber-500/20 text-amber-400' :
+                                          task?.status === 'cancelled' ? 'bg-gray-500/20 text-gray-400' :
+                                          'bg-yellow-500/20 text-yellow-400'
+                                        }`}>
+                                          {task?.status === 'completed' ? '已完成' :
+                                           task?.status === 'running' ? '执行中' :
+                                           task?.status === 'paused' ? '已暂停' :
+                                           task?.status === 'cancelled' ? '已取消' : '等待中'}
+                                        </span>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                                {relatedTaskIds.length > 10 && (
+                                  <span className="text-gray-500 px-1.5 py-0.5 text-[10px] text-center">
+                                    +{relatedTaskIds.length - 10} 更多任务...
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {log.slotId && slotHistory.length > 1 && (
+                            <div className="space-y-0.5 text-[11px]">
+                              <div className="text-gray-500 font-medium mb-1 flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                {log.slotId} 同货位最近操作 ({slotHistory.length})
+                              </div>
+                              <div className="space-y-0.5 max-h-24 overflow-y-auto">
+                                {slotHistory.slice(0, 8).map((hlog, hIdx) => {
+                                  const hconfig = logTypeConfig[hlog.type];
+                                  return (
+                                    <div key={hlog.id} className="flex items-start gap-1 px-1.5 py-0.5 rounded hover:bg-white/5">
+                                      <span className={`mt-0.5 ${hconfig.color}`}>
+                                        {hconfig.icon}
+                                      </span>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-gray-400 truncate">{hlog.message}</div>
+                                        <div className="text-gray-600 text-[10px]">
+                                          {formatTime(hlog.timestamp)}
+                                          {hIdx === 0 && <span className="ml-1 text-purple-400">← 当前</span>}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          {log.slotId && (
+                            (() => {
+                              const slot = slots.find(s => s.id === log.slotId);
+                              if (!slot) return null;
+                              return (
+                                <div className="text-[11px] bg-blue-500/10 border border-blue-500/30 rounded px-2 py-1.5 space-y-0.5">
+                                  <div className="text-blue-400 font-medium flex items-center gap-1">
+                                    <Package className="w-3 h-3" />
+                                    {log.slotId} 当前库存快照
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-gray-500">状态</span>
+                                    <span className={slot.isOccupied ? 'text-green-400' : 'text-gray-400'}>
+                                      {slot.isOccupied ? '已占用' : '空闲'}
+                                    </span>
+                                  </div>
+                                  {slot.isOccupied && (
+                                    <>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-gray-500">货物</span>
+                                        <span className="text-white">{slot.goodsName}</span>
+                                      </div>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-gray-500">数量</span>
+                                        <span className="text-orange-400 font-mono font-bold">{slot.quantity}</span>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              );
+                            })()
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })
