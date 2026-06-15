@@ -29,19 +29,76 @@ export interface InventoryRecord {
   locations: string[];
 }
 
+export interface SlotDetailRecord {
+  id: string;
+  layer: number;
+  position: number;
+  goodsName: string;
+  quantity: number;
+}
+
+export type TaskType = 'inbound' | 'outbound';
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'cancelled';
+
+export interface BaseTask {
+  id: string;
+  type: TaskType;
+  status: TaskStatus;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  slotId: string;
+  layer: number;
+  position: number;
+}
+
+export interface InboundTask extends BaseTask {
+  type: 'inbound';
+  goodsName: string;
+  quantity: number;
+}
+
+export interface OutboundTask extends BaseTask {
+  type: 'outbound';
+  goodsName: string;
+  quantity: number;
+  totalQuantity: number;
+}
+
+export type WarehouseTask = InboundTask | OutboundTask;
+
+export type LogType = 'inbound' | 'outbound' | 'import' | 'export' | 'check' | 'task' | 'mode';
+
 export interface OperationLog {
   id: string;
   timestamp: number;
-  type: 'inbound' | 'outbound' | 'import' | 'export' | 'check';
+  type: LogType;
   message: string;
+  slotId?: string;
+  taskId?: string;
+  details?: {
+    layer?: number;
+    position?: number;
+    goodsName?: string;
+    quantity?: number;
+    taskType?: TaskType;
+  };
+}
+
+export interface ImportResult {
+  success: number;
+  skipped: number;
+  errors: number;
 }
 
 export interface AppState {
   slots: StorageSlot[];
   stacker: StackerState;
   logs: OperationLog[];
+  taskQueue: WarehouseTask[];
   showHeatmap: boolean;
   selectedSlot: StorageSlot | null;
+  highlightedSlotId: string | null;
   modals: {
     inbound: boolean;
     outbound: boolean;
@@ -49,14 +106,18 @@ export interface AppState {
   };
   outboundGoodsName: string;
   foundSlots: StorageSlot[];
+  importResult: ImportResult | null;
+  showImportResult: boolean;
 }
 
 export interface AppActions {
   initSlots: () => void;
   addGoods: (layer: number, position: number, name: string, quantity: number) => boolean;
+  removeGoodsPartial: (layer: number, position: number, quantity: number) => boolean;
   removeGoods: (layer: number, position: number) => boolean;
   findGoods: (name: string) => StorageSlot[];
   getInventoryList: () => InventoryRecord[];
+  getSlotDetailList: () => SlotDetailRecord[];
   setStackerPosition: (x: number, y: number, z: number) => void;
   setStackerBusy: (busy: boolean) => void;
   setStackerMode: (mode: 'auto' | 'manual') => void;
@@ -64,14 +125,23 @@ export interface AppActions {
   moveStackerManual: (direction: 'up' | 'down' | 'left' | 'right') => void;
   toggleHeatmap: () => void;
   setSelectedSlot: (slot: StorageSlot | null) => void;
+  setHighlightedSlotId: (slotId: string | null) => void;
   openModal: (modal: 'inbound' | 'outbound' | 'inventory') => void;
   closeModal: (modal: 'inbound' | 'outbound' | 'inventory') => void;
   setOutboundGoodsName: (name: string) => void;
-  addLog: (type: OperationLog['type'], message: string) => void;
-  importCSV: (data: string) => boolean;
+  addLog: (log: Omit<OperationLog, 'id' | 'timestamp'>) => void;
+  addInboundTask: (layer: number, position: number, name: string, quantity: number) => string;
+  addOutboundTask: (layer: number, position: number, quantity: number) => string;
+  updateTaskStatus: (taskId: string, status: TaskStatus) => void;
+  processNextTask: () => void;
+  cancelTask: (taskId: string) => void;
+  clearCompletedTasks: () => void;
+  importCSV: (data: string) => ImportResult;
   exportCSV: () => string;
+  setImportResult: (result: ImportResult | null, show: boolean) => void;
   saveToStorage: () => void;
   loadFromStorage: () => void;
+  locateLog: (log: OperationLog) => void;
 }
 
 export const SLOT_CONFIG = {
@@ -114,3 +184,6 @@ export const getHeatmapColor = (quantity: number, showHeatmap: boolean): string 
   }
   return '#2e7d32';
 };
+
+export const TASK_STORAGE_KEY = 'warehouse-tasks';
+export const LOGS_STORAGE_KEY = 'warehouse-logs';

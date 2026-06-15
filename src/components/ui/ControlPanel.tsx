@@ -29,13 +29,14 @@ export function ControlPanel() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (!window.confirm('导入CSV将清空当前所有库存并重建，是否继续？\n\n（本操作不可撤销，建议先导出备份）')) {
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        return;
+      }
       const reader = new FileReader();
       reader.onload = (event) => {
         const content = event.target?.result as string;
-        const success = importCSV(content);
-        if (!success) {
-          alert('CSV导入失败，请检查文件格式');
-        }
+        importCSV(content);
       };
       reader.readAsText(file);
     }
@@ -66,8 +67,7 @@ export function ControlPanel() {
 
           <button
             onClick={() => openModal('outbound')}
-            disabled={stacker.isBusy || stacker.mode !== 'auto'}
-            className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
+            className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
           >
             <ArrowUpFromLine className="w-4 h-4" />
             <span className="text-sm font-medium">出库</span>

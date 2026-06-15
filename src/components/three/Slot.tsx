@@ -14,15 +14,33 @@ export function Slot({ slot, onClick }: SlotProps) {
   const [hovered, setHovered] = useState(false);
   const showHeatmap = useStore(state => state.showHeatmap);
   const selectedSlot = useStore(state => state.selectedSlot);
+  const highlightedSlotId = useStore(state => state.highlightedSlotId);
   const isSelected = selectedSlot?.id === slot.id;
+  const isHighlighted = highlightedSlotId === slot.id;
 
   const baseColor = getHeatmapColor(slot.quantity, showHeatmap);
-  const displayColor = hovered ? '#ffeb3b' : isSelected ? '#ff9800' : baseColor;
+  let displayColor = baseColor;
+  let emissiveColor = '#000000';
+  let emissiveIntensity = 0;
+
+  if (hovered) {
+    displayColor = '#ffeb3b';
+    emissiveColor = '#ffeb3b';
+    emissiveIntensity = 0.25;
+  } else if (isSelected) {
+    displayColor = '#ff9800';
+    emissiveColor = '#ff9800';
+    emissiveIntensity = 0.35;
+  } else if (isHighlighted) {
+    displayColor = '#e91e63';
+    emissiveColor = '#e91e63';
+    emissiveIntensity = 0.5;
+  }
 
   useFrame((_, delta) => {
     if (meshRef.current) {
-      const targetScale = hovered || isSelected ? 1.05 : 1;
-      meshRef.current.scale.lerp({ x: targetScale, y: targetScale, z: targetScale }, delta * 8);
+      const targetScale = hovered || isSelected || isHighlighted ? 1.08 : 1;
+      meshRef.current.scale.lerp({ x: targetScale, y: targetScale, z: targetScale }, delta * 10);
     }
   });
 
@@ -59,20 +77,20 @@ export function Slot({ slot, onClick }: SlotProps) {
           color={displayColor}
           metalness={0.1}
           roughness={0.7}
-          emissive={isSelected ? '#ff9800' : hovered ? '#ffeb3b' : '#000000'}
-          emissiveIntensity={isSelected ? 0.3 : hovered ? 0.2 : 0}
+          emissive={emissiveColor}
+          emissiveIntensity={emissiveIntensity}
           transparent
-          opacity={0.9}
+          opacity={0.92}
         />
       </mesh>
 
       {slot.isOccupied && (
-        <mesh position={[0, 0, SLOT_CONFIG.SLOT_DEPTH * 0.1]}>
+        <mesh position={[0, 0, SLOT_CONFIG.SLOT_DEPTH * 0.08]}>
           <boxGeometry
             args={[
-              SLOT_CONFIG.SLOT_WIDTH * 0.7,
-              SLOT_CONFIG.SLOT_HEIGHT * 0.6,
-              SLOT_CONFIG.SLOT_DEPTH * 0.6,
+              SLOT_CONFIG.SLOT_WIDTH * 0.68,
+              SLOT_CONFIG.SLOT_HEIGHT * 0.55,
+              SLOT_CONFIG.SLOT_DEPTH * 0.55,
             ]}
           />
           <meshStandardMaterial
