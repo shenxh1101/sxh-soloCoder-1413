@@ -12,6 +12,7 @@ import {
   OutboundTask,
   TaskStatus,
   TaskPriority,
+  TaskExecutionPhase,
   ImportResult,
   WaveOutboundResult,
   SLOT_CONFIG,
@@ -64,9 +65,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   logs: [],
   taskQueue: [],
   isQueuePaused: false,
+  pauseRequested: false,
   showHeatmap: false,
   selectedSlot: null,
   highlightedSlotId: null,
+  highlightedTaskId: null,
   modals: {
     inbound: false,
     outbound: false,
@@ -442,13 +445,17 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     return taskId;
   },
 
-  updateTaskStatus: (taskId: string, status: TaskStatus) => {
+  updateTaskStatus: (taskId: string, status: TaskStatus, phase?: TaskExecutionPhase) => {
     set(state => {
       const newQueue = state.taskQueue.map(t => {
         if (t.id === taskId) {
           const updated = { ...t, status } as WarehouseTask;
           if (status === 'running') updated.startedAt = Date.now();
           if (status === 'completed' || status === 'cancelled') updated.completedAt = Date.now();
+          if (phase) updated.executionPhase = phase;
+          if (status === 'paused' && phase) {
+            updated.pausedAt = { phase, timestamp: Date.now() };
+          }
           return updated;
         }
         return t;
@@ -456,6 +463,31 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(newQueue));
       return { taskQueue: newQueue };
     });
+  },
+
+  updateTaskExecutionPhase: (taskId: string, phase: TaskExecutionPhase) => {
+    set(state => {
+      const newQueue = state.taskQueue.map(t => {
+        if (t.id === taskId) {
+          return { ...t, executionPhase: phase } as WarehouseTask;
+        }
+        return t;
+      });
+      localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(newQueue));
+      return { taskQueue: newQueue };
+    });
+  },
+
+  setHighlightedTaskId: (taskId: string | null) => {
+    set({ highlightedTaskId: taskId });
+  },
+
+  toggleLogExpanded: (logId: string) => {
+    set(state => ({
+      logs: state.logs.map(log =>
+        log.id === logId ? { ...log, expanded: !log.expanded } : log
+      ),
+    }));
   },
 
   processNextTask: () => {
